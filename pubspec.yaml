@@ -1,0 +1,28 @@
+name: member_vault
+description: "Remember which apps you hold memberships in, what tier, when they expire, and whether auto-renew is on."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 本地存储
+  sqflite: ^2.3.0
+  path: ^1.8.0
+  shared_preferences: ^2.2.0
+  # 本地到期提醒
+  flutter_local_notifications: ^17.0.0
+  timezone: ^0.9.0
+  # 系统设置跳转（通知权限引导）
+  app_settings: ^5.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
