@@ -136,11 +136,13 @@ class _EditPageState extends State<EditPage> {
           ? (await DbHelper.instance.updateRecord(record), widget.record!.id!).$2
           : await DbHelper.instance.insertRecord(record);
 
-      // 调度到期提醒（调度失败不影响保存结果）
+      // 调度到期提醒（调度失败不影响保存结果）。
+      // 保存时 allowFallback=true：临期新建记录（常规提醒点已过）降级尽快提醒；
+      // 启动重排/改设置走 rescheduleAll 的 allowFallback=false，避免冷启动补发打扰。
       final saved = record.copyWith(id: id);
       try {
         await NotificationService.instance
-            .scheduleExpiryReminder(saved, _remindDays);
+            .scheduleExpiryReminder(saved, _remindDays, allowFallback: true);
       } catch (e) {
         debugPrint('调度到期提醒失败: $e');
       }

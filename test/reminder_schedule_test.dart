@@ -106,5 +106,34 @@ void main() {
       );
       expect(t, DateTime(2027, 12, 29, 10));
     });
+
+    test('allowFallback=false（启动重排/改设置）：已过提醒点但未过期 → 返回 null 跳过', () {
+      // 会员 2 天后到期（在 3 天窗口内），常规提醒点(3/9 10:00)已过。
+      // 若此时冷启动 rescheduleAll(allowFallback=false) 仍返回 now+10s，
+      // 用户每次打开 App 都会被补发一条"即将到期"——这正是 P1-A 要消除的打扰。
+      final t = computeReminderInstant(
+        expiry: DateTime(2027, 3, 12),
+        daysBefore: 3,
+        now: now,
+        allowFallback: false,
+      );
+      expect(t, null);
+    });
+
+    test('allowFallback 默认 true：与显式 true 行为一致（尽快触发）', () {
+      final tDefault = computeReminderInstant(
+        expiry: DateTime(2027, 3, 12),
+        daysBefore: 3,
+        now: now,
+      );
+      final tTrue = computeReminderInstant(
+        expiry: DateTime(2027, 3, 12),
+        daysBefore: 3,
+        now: now,
+        allowFallback: true,
+      );
+      expect(tDefault, now.add(const Duration(seconds: 10)));
+      expect(tTrue, now.add(const Duration(seconds: 10)));
+    });
   });
 }

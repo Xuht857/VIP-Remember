@@ -3,12 +3,16 @@
 /// 规则（与 PRD F5 一致）：
 /// 1. 到期日已过（按日历日比较）→ 返回 null，不再提醒；
 /// 2. 常规提醒时刻 = 到期日 - [daysBefore] 天，当天 10:00（设备本地墙钟）；
-/// 3. 若常规提醒时刻已过、但记录尚未到期 → 降级为 [now] + 10 秒尽快触发
-///    （修复"临期新建记录收不到任何提醒"的静默丢弃问题）。
+/// 3. 若常规提醒时刻已过、但记录尚未到期：
+///    - [allowFallback]=true（保存新建时）→ 降级为 [now] + 10 秒尽快触发，
+///      修复"临期新建记录收不到任何提醒"的静默丢弃问题；
+///    - [allowFallback]=false（启动重排/改设置时）→ 返回 null 跳过，
+///      避免每次冷启动都补发一条"即将到期"，造成打扰（见交叉审核 P1-A）。
 DateTime? computeReminderInstant({
   required DateTime expiry,
   required int daysBefore,
   required DateTime now,
+  bool allowFallback = true,
 }) {
   final expiryDay = DateTime(expiry.year, expiry.month, expiry.day);
   final today = DateTime(now.year, now.month, now.day);
@@ -22,7 +26,7 @@ DateTime? computeReminderInstant({
     10,
   );
   if (scheduled.isBefore(now)) {
-    return now.add(const Duration(seconds: 10));
+    return allowFallback ? now.add(const Duration(seconds: 10)) : null;
   }
   return scheduled;
 }

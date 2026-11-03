@@ -18,6 +18,8 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
+          # 锁定与本地开发一致的稳定版，避免 CI 拉到不同 minor 导致行为漂移
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
 
@@ -37,7 +39,7 @@ jobs:
       - name: Assert notification receivers present in APK manifest
         run: |
           APK=build/app/outputs/flutter-apk/app-debug.apk
-          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1 || ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
           "$AAPT" dump xmltree "$APK" AndroidManifest.xml > manifest_tree.txt
           grep -qi "ScheduledNotificationReceiver" manifest_tree.txt \
             || { echo "FAIL: ScheduledNotificationReceiver missing"; exit 1; }
@@ -53,7 +55,7 @@ jobs:
           grep -q 'desugar_jdk_libs' android/app/build.gradle.kts \
             || { echo "FAIL: desugar_jdk_libs dependency missing"; exit 1; }
           APK=build/app/outputs/flutter-apk/app-debug.apk
-          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1 || ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
           MINSDK=$("$AAPT" dump badging "$APK" | grep sdkVersion | head -1 | sed "s/.*sdkVersion:'\([0-9]*\)'.*/\1/")
           echo "minSdk=$MINSDK"
           if [ "$MINSDK" -lt 26 ]; then

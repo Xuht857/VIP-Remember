@@ -18,11 +18,13 @@ class NotificationService {
   bool _initialized = false;
 
   /// iOS 系统对待发通知有 64 条硬上限（插件 README 明示），
-  /// 只排最近 [iosPendingCap] 条，预留测试通知等名额。
+  /// 只排最近 [iosPendingCap] 条（其余 cancel），预留测试通知等名额，
+  /// 同时避免占用远景提醒挤掉临期提醒（见交叉审核 P1-B）。
   static const int iosPendingCap = 60;
 
   /// 测试通知 id（避免与自增记录 id 冲突）
   static const int testNotificationId = 999999;
+  static const int testNotificationImmediateId = 1000000;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -60,15 +62,29 @@ class NotificationService {
         ?.requestNotificationsPermission();
   }
 
-  /// 通知权限是否已开启（Android 13+ 可被用户拒绝；iOS 同理）
-  Future<bool> areNotificationsEnabled() async {
+  /// 通知权限是否已开启（用于设置页引导）。
+  /// - Android 13+：取真实开关状态；
+  /// - iOS：areNotificationsEnabled 在插件层恒返回 true，改用 checkPermissions
+  ///   取真实状态；无法判定时返回 null（UI 显示"检测中…"）。
+  Future<bool?> areNotificationsEnabled() async {
     final android = _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
     if (android != null) {
       return await android.areNotificationsEnabled() ?? true;
     }
-    // iOS：无法可靠查询时默认视为开启（首次请求会弹系统框）
+    final ios = _plugin
+        .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>();
+    if (ios != null) {
+      try {
+        final opts = await ios.checkPermissions();
+        // null = 无法判定（保守视为未知，UI 显示"检测中"）
+        return opts?.isEnabled;
+      } catch (_) {
+        return null;
+      }
+    }
     return true;
   }
 
@@ -83,38 +99,22 @@ class NotificationService {
     iOS: DarwinNotificationDetails(),
   );
 
-  /// 为一条记录调度到期提醒
-  /// [daysBefore] 提前几天提醒
-  Future<void> scheduleExpiryReminder(
+  /// 为单条记录在指定 instant 调度提醒（内部共用，不做"是否跳过"判断）。
+  Future<void> _scheduleAt(
     MemberRecord record,
+    DateTime instant,
     int daysBefore,
   ) async {
-    if (!_initialized) await init();
-    if (record.id == null || record.expiresAt == null) return;
-
-    final id = record.id!;
-    // 同一记录先取消旧调度，避免重复
-    await _plugin.cancel(id);
-
-    if (!record.isActive) return;
-
+    if (record.id == null) return;
     final expiry = record.expiresAt!;
     final now = DateTime.now();
-    final instant = computeReminderInstant(
-      expiry: expiry,
-      daysBefore: daysBefore,
-      now: now,
-    );
-    // null = 已过期，不提醒
-    if (instant == null) return;
-
-    // 判定是否为"临期降级触发"（常规提醒点已过、记录未到期）
     final nominal = DateTime(
       expiry.year,
       expiry.month,
       expiry.day - daysBefore,
       10,
     );
+    // 判定是否为"临期降级触发"（常规提醒点已过、记录未到期）
     final lateFallback = nominal.isBefore(now);
 
     final title = record.autoRenew
@@ -129,7 +129,7 @@ class NotificationService {
             : '将于 ${_fmt(expiry)} 到期${record.level != null ? '（${record.level}）' : ''}');
 
     await _plugin.zonedSchedule(
-      id,
+      record.id!,
       title,
       body,
       tz.TZDateTime.from(instant, tz.local),
@@ -142,45 +142,99 @@ class NotificationService {
     );
   }
 
-  /// 全量重排（启动时/提醒天数变更后调用），并执行 iOS 待发上限审计
-  Future<void> rescheduleAll(List<MemberRecord> records, int daysBefore) async {
+  /// 为一条记录调度到期提醒。
+  /// [daysBefore] 提前几天提醒；[allowFallback] 见 computeReminderInstant。
+  /// 仅新建/编辑保存时传 allowFallback=true，启动重排/改设置时传 false。
+  Future<void> scheduleExpiryReminder(
+    MemberRecord record,
+    int daysBefore, {
+    bool allowFallback = true,
+  }) async {
     if (!_initialized) await init();
+    if (record.id == null || record.expiresAt == null) return;
+
+    final id = record.id!;
+    // 同一记录先取消旧调度，避免重复
+    await _plugin.cancel(id);
+
+    if (!record.isActive) return;
+
+    final now = DateTime.now();
+    final instant = computeReminderInstant(
+      expiry: record.expiresAt!,
+      daysBefore: daysBefore,
+      now: now,
+      allowFallback: allowFallback,
+    );
+    // null = 已过期 或（allowFallback=false 且常规提醒点已过的临期记录）→ 不提醒
+    if (instant == null) return;
+
+    await _scheduleAt(record, instant, daysBefore);
+  }
+
+  /// 全量重排（启动时/提醒天数变更后调用）。
+  ///
+  /// - Android：全部记录均调度。
+  /// - iOS：受 64 条待发上限约束，只排触发时刻最近的 [iosPendingCap] 条，
+  ///   其余显式 cancel（不在 iOS 上"先排完再裁"，避免最远的被保留、临期的被丢弃，
+  ///   见交叉审核 P1-B）。
+  /// [allowFallback]：启动重排/改设置默认 false（跳过已过提醒点记录，不补发打扰）。
+  Future<void> rescheduleAll(
+    List<MemberRecord> records,
+    int daysBefore, {
+    bool allowFallback = false,
+  }) async {
+    if (!_initialized) await init();
+    final now = DateTime.now();
+
+    // 先取消全部记录相关的旧调度，避免残留
     for (final r in records) {
-      await scheduleExpiryReminder(r, daysBefore);
+      if (r.id != null) await _plugin.cancel(r.id!);
     }
-    await enforcePendingCap();
+
+    // 计算每条的触发时刻
+    final entries = <_PendingEntry>[];
+    for (final r in records) {
+      if (r.id == null || r.expiresAt == null || !r.isActive) continue;
+      final instant = computeReminderInstant(
+        expiry: r.expiresAt!,
+        daysBefore: daysBefore,
+        now: now,
+        allowFallback: allowFallback,
+      );
+      if (instant != null) entries.add(_PendingEntry(r, instant));
+    }
+
+    // iOS 上限：只保留触发时刻最近的 iosPendingCap 条，其余 cancel
+    if (Platform.isIOS && entries.length > iosPendingCap) {
+      entries.sort((a, b) => a.instant.compareTo(b.instant));
+      for (final e in entries.skip(iosPendingCap)) {
+        if (e.record.id != null) await _plugin.cancel(e.record.id!);
+      }
+      entries.removeRange(iosPendingCap, entries.length);
+    }
+
+    // 统一调度
+    for (final e in entries) {
+      await _scheduleAt(e.record, e.instant, daysBefore);
+    }
   }
 
-  /// iOS 待发通知上限审计：仅保留触发时刻最近的 [iosPendingCap] 条。
-  /// （Android 无此上限，不做裁剪，避免多会员用户丢提醒。）
-  Future<void> enforcePendingCap() async {
-    if (!_initialized) return;
-    if (!Platform.isIOS) return;
-
-    final pending = await _plugin.pendingNotificationRequests();
-    if (pending.length <= iosPendingCap) return;
-
-    // id -> 触发时刻（epoch ms）；payload 缺失视为最近（保守保留旧数据）
-    final keyed = <int, int>{};
-    for (final p in pending) {
-      keyed[p.id] = int.tryParse(p.payload ?? '') ?? 0;
-    }
-    final sorted = keyed.keys.toList()
-      ..sort((a, b) => keyed[a]!.compareTo(keyed[b]!));
-    // 跳过最近的 iosPendingCap 条，取消更远的
-    for (final id in sorted.skip(iosPendingCap)) {
-      await _plugin.cancel(id);
-    }
-  }
-
-  /// 发送一条 10 秒后的测试通知（设置页自证提醒链路用）
+  /// 发送测试提醒：立即弹一条（验证 show 通道，不受 Doze/inexact 延迟影响）
+  /// + 另排一条 10 秒后的定时通知（验证 zonedSchedule 调度链路）。
   Future<void> sendTestNotification() async {
     if (!_initialized) await init();
+    await _plugin.show(
+      testNotificationImmediateId,
+      '测试提醒（即时）',
+      '这是一条立即显示的测试通知，说明通知通道正常',
+      _details,
+    );
     final when = DateTime.now().add(const Duration(seconds: 10));
     await _plugin.zonedSchedule(
       testNotificationId,
-      '测试提醒',
-      '这是一条测试通知，说明到期提醒链路工作正常',
+      '测试提醒（定时）',
+      '这是一条 10 秒后定时推送的测试通知，验证到期提醒调度链路',
       tz.TZDateTime.from(when, tz.local),
       _details,
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
@@ -194,4 +248,11 @@ class NotificationService {
 
   String _fmt(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+}
+
+/// 待调度条目（记录 + 触发时刻），用于 iOS 上限裁剪排序
+class _PendingEntry {
+  final MemberRecord record;
+  final DateTime instant;
+  _PendingEntry(this.record, this.instant);
 }
