@@ -42,12 +42,7 @@ jobs:
             # 把关键错误行写成 check-run 注解。公开仓库的注解可匿名读取，
             # 这样即使没有 PAT 下载 job 日志，也能自动获取失败原因。
             echo "::error title=Build debug APK failed::exit_code=$code"
-            python3 - <<'PY'
-lines = open('/tmp/flutter_build.log', errors='replace').read().splitlines()
-start = next((i for i, l in enumerate(lines) if 'FAILURE: Build failed' in l), max(0, len(lines) - 60))
-block = [l.replace('%', '%25').replace('\r', '').strip() for l in lines[start:start + 60]]
-print('::error title=Gradle failure block::' + '%0A'.join(block)[:60000])
-PY
+            python3 -c "import pathlib; ls=pathlib.Path('/tmp/flutter_build.log').read_text(errors='replace').splitlines(); i=next((j for j,l in enumerate(ls) if 'FAILURE: Build failed' in l), max(0,len(ls)-60)); b=[l.replace('%','%25').strip() for l in ls[i:i+60]]; print('::error title=Gradle failure block::'+'%0A'.join(b)[:60000])"
             exit "$code"
           fi
 
