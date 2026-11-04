@@ -1,4 +1,3 @@
-import 'package:app_settings/app_settings.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/db_helper.dart';
@@ -139,15 +138,23 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             trailing: TextButton(
               onPressed: () async {
+                // 在 await 之前取 messenger，避免异步间隙后使用 BuildContext。
+                final messenger = ScaffoldMessenger.of(context);
+                // 直接通过通知插件请求权限（Android 13+ / iOS 首次）。
+                // 若曾被永久拒绝，系统不再弹窗，此时给出手动引导。
+                await NotificationService.instance.requestPermissions();
+                if (mounted) await _checkPermission();
+                if (!mounted) return;
                 if (_notifEnabled == false) {
-                  await AppSettings.openAppSettings(
-                      type: AppSettingsType.notification);
-                } else {
-                  await NotificationService.instance.requestPermissions();
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text('仍未获得通知权限，请到「系统设置 → 通知」手动开启'),
+                      duration: Duration(seconds: 5),
+                    ),
+                  );
                 }
-                if (mounted) _checkPermission();
               },
-              child: Text(_notifEnabled == false ? '去系统设置' : '重新检测'),
+              child: Text(_notifEnabled == false ? '请求权限' : '重新检测'),
             ),
           ),
           ListTile(

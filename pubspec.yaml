@@ -16,8 +16,8 @@ dependencies:
   # 本地到期提醒
   flutter_local_notifications: ^17.0.0
   timezone: ^0.9.0
-  # 系统设置跳转（通知权限引导）
-  app_settings: ^5.1.1
+  # 通知权限引导直接使用 flutter_local_notifications 的 requestPermissions()，
+  # 不引入 app_settings（其 AAR 依赖要求 compileSdk>=34，会破坏 Android 构建）。
 
 dev_dependencies:
   flutter_test:

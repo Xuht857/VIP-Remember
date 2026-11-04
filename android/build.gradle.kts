@@ -19,45 +19,9 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
-// 修复：部分第三方 Flutter 插件（如 app_settings 5.2.0）自带较低的 compileSdk（android-33），
-// 但其依赖的新版 AndroidX（fragment 1.7.1 / window 1.2.0 / core-ktx 1.13.1 等）要求 compileSdk >= 34，
-// 会导致 checkDebugAarMetadata 校验失败、APK 构建中断。
-// 在根工程统一强制所有含 android 扩展的子工程使用 compileSdk = 35（与 app 一致）。
-// 用反射设置，以规避根脚本 classpath 中缺少 AGP DSL 类型（LibraryExtension 等）导致脚本无法编译的问题。
-subprojects {
-    // 强制所有含 android 扩展的子工程使用 compileSdk = 35（与 app 一致）。
-    // 用反射设置，规避根脚本 classpath 缺少 AGP DSL 类型导致脚本无法编译。
-    // 本文件上方有 `subprojects { project.evaluationDependsOn(":app") }`，
-    // 会把 :app 提前评估完毕；此时再对其调用 afterEvaluate 会抛
-    // "Cannot run Project.afterEvaluate when the project is already evaluated"。
-    // 因此已评估的项目直接执行，未评估的才挂 afterEvaluate（库插件走这条）。
-    fun applyCompileSdk() {
-        val ext = extensions.findByName("android") ?: return
-        val methods = ext.javaClass.methods
-        // 只匹配 int/Integer 参数的 setter，避免误命中 setCompileSdkVersion(String)
-        // 导致 invoke(ext, 35) 抛 IllegalArgumentException。
-        val intSetter = methods.firstOrNull { m ->
-            (m.name == "setCompileSdk" || m.name == "setCompileSdkVersion") &&
-                m.parameterCount == 1 &&
-                (m.parameterTypes[0] == java.lang.Integer.TYPE || m.parameterTypes[0] == java.lang.Integer::class.java)
-        }
-        if (intSetter != null) {
-            intSetter.invoke(ext, 35)
-        } else {
-            // 部分 AGP 版本只暴露字符串重载，回退到 "android-35"
-            val strSetter = methods.firstOrNull { m ->
-                m.name == "setCompileSdkVersion" && m.parameterCount == 1 &&
-                    m.parameterTypes[0] == String::class.java
-            }
-            strSetter?.invoke(ext, "android-35")
-        }
-    }
-    if (state.executed) {
-        applyCompileSdk()
-    } else {
-        afterEvaluate { applyCompileSdk() }
-    }
-}
+// 不再为第三方插件强制 compileSdk：已移除 app_settings 插件，
+// 其 AndroidX 依赖曾要求 compileSdk>=34 导致 AAR metadata 校验失败；
+// 同时避免自定义 subprojects/afterEvaluate 补丁与 Gradle 评估时序冲突。
 
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
