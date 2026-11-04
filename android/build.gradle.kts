@@ -25,25 +25,23 @@ subprojects {
 // 在根工程统一强制所有含 android 扩展的子工程使用 compileSdk = 35（与 app 一致）。
 // 用反射设置，以规避根脚本 classpath 中缺少 AGP DSL 类型（LibraryExtension 等）导致脚本无法编译的问题。
 subprojects {
-    val proj = this
-    val applyCompileSdk35 = {
-        val ext = proj.extensions.findByName("android") ?: return@applyCompileSdk35
-        // compileSdk 在 AGP 中声明为可空 Int?，JVM 方法参数实际为 Integer；
-        // 按方法名+单参数查找（不限定 int/Integer），再用 invoke(ext, 35)
-        // 让 Kotlin 的 35 自动装箱，两种签名都能命中。
+    // 强制所有含 android 扩展的子工程使用 compileSdk = 35（与 app 一致）。
+    // 用反射设置，规避根脚本 classpath 缺少 AGP DSL 类型导致脚本无法编译。
+    // 本文件上方有 `subprojects { project.evaluationDependsOn(":app") }`，
+    // 会把 :app 提前评估完毕；此时再对其调用 afterEvaluate 会抛
+    // "Cannot run Project.afterEvaluate when the project is already evaluated"。
+    // 因此已评估的项目直接执行，未评估的才挂 afterEvaluate（库插件走这条）。
+    fun applyCompileSdk() {
+        val ext = extensions.findByName("android") ?: return
         val setter = ext.javaClass.methods.firstOrNull { m ->
             (m.name == "setCompileSdk" || m.name == "setCompileSdkVersion") && m.parameterCount == 1
         }
         setter?.invoke(ext, 35)
     }
-    // 注意：本文件上方有 `subprojects { project.evaluationDependsOn(":app") }`，
-    // 会把 :app 提前评估完毕；此时再对其调用 afterEvaluate 会抛
-    // "Cannot run Project.afterEvaluate when the project is already evaluated"。
-    // 因此已评估的项目直接执行，未评估的才挂 afterEvaluate（库插件走这条）。
-    if (proj.state.executed) {
-        applyCompileSdk35()
+    if (state.executed) {
+        applyCompileSdk()
     } else {
-        proj.afterEvaluate { applyCompileSdk35() }
+        afterEvaluate { applyCompileSdk() }
     }
 }
 
