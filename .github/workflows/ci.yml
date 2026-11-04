@@ -33,7 +33,25 @@ jobs:
         run: flutter test
 
       - name: Build debug APK
-        run: flutter build apk --debug
+        shell: bash
+        run: |
+          set +e
+          flutter build apk --debug 2>&1 | tee /tmp/flutter_build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # 把关键错误行写成 check-run 注解。公开仓库的注解可匿名读取，
+            # 这样即使没有 PAT 下载 job 日志，也能自动获取失败原因。
+            echo "::error title=Build debug APK failed::exit_code=$code"
+            grep -nE 'FAILURE:|What went wrong|Script compilation|error:|Unresolved|Cannot run|BUILD FAILED|Execution failed|SDK location|Could not resolve|Error:' /tmp/flutter_build.log \
+              | head -40 \
+              | while IFS= read -r line; do
+                  line=${line//%/%25}
+                  line=${line//$'\r'/%0D}
+                  line=${line//$'\n'/%0A}
+                  echo "::error::${line:0:900}"
+                done
+            exit "$code"
+          fi
 
       # P0-1 验收断言：两个 receiver 必须真实进入 APK 的合并后 Manifest
       - name: Assert notification receivers present in APK manifest
