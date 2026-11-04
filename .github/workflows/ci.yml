@@ -48,31 +48,42 @@ jobs:
 
       # P0-1 验收断言：两个 receiver 必须真实进入 APK 的合并后 Manifest
       - name: Assert notification receivers present in APK manifest
+        shell: bash
         run: |
           APK=build/app/outputs/flutter-apk/app-debug.apk
-          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1 || ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
-          "$AAPT" dump xmltree "$APK" AndroidManifest.xml > manifest_tree.txt
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1)
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | head -n 1)
+          # aapt2 必须用 --file 指定 APK 内条目；aapt(v1) 才用位置参数
+          if [ -n "$AAPT2" ]; then
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > manifest_tree.txt 2>&1
+          else
+            "$AAPT" dump xmltree "$APK" AndroidManifest.xml > manifest_tree.txt 2>&1
+          fi
+          echo "manifest dump lines: $(wc -l < manifest_tree.txt)"
           grep -qi "ScheduledNotificationReceiver" manifest_tree.txt \
-            || { echo "FAIL: ScheduledNotificationReceiver missing"; exit 1; }
+            || { echo "::error::FAIL: ScheduledNotificationReceiver missing in merged manifest"; python3 -c "import pathlib;print('::error title=manifest dump::'+'%0A'.join(l.replace('%','%25') for l in pathlib.Path('manifest_tree.txt').read_text(errors='replace').splitlines()[:30]))"; exit 1; }
           grep -qi "ScheduledNotificationBootReceiver" manifest_tree.txt \
-            || { echo "FAIL: ScheduledNotificationBootReceiver missing"; exit 1; }
+            || { echo "::error::FAIL: ScheduledNotificationBootReceiver missing in merged manifest"; python3 -c "import pathlib;print('::error title=manifest dump::'+'%0A'.join(l.replace('%','%25') for l in pathlib.Path('manifest_tree.txt').read_text(errors='replace').splitlines()[:30]))"; exit 1; }
           echo "PASS: both receivers present in APK manifest"
 
       # P0-2 验收断言：desugaring 配置存在；minSdk<26 时断言 dex 中含 desugar 后的 java.time（j$/time）
       - name: Assert core library desugaring
+        shell: bash
         run: |
           grep -q 'isCoreLibraryDesugaringEnabled = true' android/app/build.gradle.kts \
-            || { echo "FAIL: coreLibraryDesugaringEnabled not set"; exit 1; }
+            || { echo "::error::FAIL: coreLibraryDesugaringEnabled not set"; exit 1; }
           grep -q 'desugar_jdk_libs' android/app/build.gradle.kts \
-            || { echo "FAIL: desugar_jdk_libs dependency missing"; exit 1; }
+            || { echo "::error::FAIL: desugar_jdk_libs dependency missing"; exit 1; }
           APK=build/app/outputs/flutter-apk/app-debug.apk
-          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1 || ls "$ANDROID_HOME"/build-tools/*/aapt | head -n 1)
-          MINSDK=$("$AAPT" dump badging "$APK" | grep sdkVersion | head -1 | sed "s/.*sdkVersion:'\([0-9]*\)'.*/\1/")
+          AAPT2=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | head -n 1)
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt 2>/dev/null | head -n 1)
+          TOOL=${AAPT2:-$AAPT}
+          MINSDK=$("$TOOL" dump badging "$APK" 2>/dev/null | grep sdkVersion | head -1 | sed "s/.*sdkVersion:'\([0-9]*\)'.*/\1/")
           echo "minSdk=$MINSDK"
-          if [ "$MINSDK" -lt 26 ]; then
+          if [ -n "$MINSDK" ] && [ "$MINSDK" -lt 26 ]; then
             unzip -p "$APK" 'classes*.dex' | grep -a -F -q 'j$/time' \
-              || { echo "FAIL: desugared java.time classes not in dex"; exit 1; }
+              || { echo "::error::FAIL: desugared java.time classes not in dex (minSdk=$MINSDK)"; exit 1; }
             echo "PASS: desugared java.time classes present in dex"
           else
-            echo "minSdk>=26, dex rewrite not expected; config assertion suffices"
+            echo "minSdk>=26 或无法读取，dex rewrite not expected; config assertion suffices"
           fi
