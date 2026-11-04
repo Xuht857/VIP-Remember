@@ -22,16 +22,19 @@ subprojects {
 // 修复：部分第三方 Flutter 插件（如 app_settings 5.2.0）自带较低的 compileSdk（android-33），
 // 但其依赖的新版 AndroidX（fragment 1.7.1 / window 1.2.0 / core-ktx 1.13.1 等）要求 compileSdk >= 34，
 // 会导致 checkDebugAarMetadata 校验失败、APK 构建中断。
-// 在此强制所有 Android 子工程（含插件模块）统一使用与 app 一致的 compileSdk = 35，确保 CI 可正常打包。
+// 在根工程统一强制所有含 android 扩展的子工程使用 compileSdk = 35（与 app 一致）。
+// 用反射设置，以规避根脚本 classpath 中缺少 AGP DSL 类型（LibraryExtension 等）导致脚本无法编译的问题。
 subprojects {
-    afterEvaluate { subproject ->
-        subproject.plugins.withId("com.android.library") {
-            val android = subproject.extensions.getByType<com.android.build.api.dsl.LibraryExtension>()
-            android.compileSdk = 35
-        }
-        subproject.plugins.withId("com.android.application") {
-            val android = subproject.extensions.getByType<com.android.build.api.dsl.ApplicationExtension>()
-            android.compileSdk = 35
+    afterEvaluate {
+        val ext = extensions.findByName("android")
+        if (ext != null) {
+            // compileSdk 在 AGP 中声明为可空 Int?，JVM 方法参数实际为 Integer；
+            // 这里按方法名+单参数查找（不限定 int/Integer），再用 invoke(ext, 35)
+            // 让 Kotlin 的 35 自动装箱，两种签名都能命中。
+            val setter = ext.javaClass.methods.firstOrNull { m ->
+                (m.name == "setCompileSdk" || m.name == "setCompileSdkVersion") && m.parameterCount == 1
+            }
+            setter?.invoke(ext, 35)
         }
     }
 }
