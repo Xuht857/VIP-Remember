@@ -33,10 +33,24 @@ subprojects {
     // 因此已评估的项目直接执行，未评估的才挂 afterEvaluate（库插件走这条）。
     fun applyCompileSdk() {
         val ext = extensions.findByName("android") ?: return
-        val setter = ext.javaClass.methods.firstOrNull { m ->
-            (m.name == "setCompileSdk" || m.name == "setCompileSdkVersion") && m.parameterCount == 1
+        val methods = ext.javaClass.methods
+        // 只匹配 int/Integer 参数的 setter，避免误命中 setCompileSdkVersion(String)
+        // 导致 invoke(ext, 35) 抛 IllegalArgumentException。
+        val intSetter = methods.firstOrNull { m ->
+            (m.name == "setCompileSdk" || m.name == "setCompileSdkVersion") &&
+                m.parameterCount == 1 &&
+                (m.parameterTypes[0] == java.lang.Integer.TYPE || m.parameterTypes[0] == java.lang.Integer::class.java)
         }
-        setter?.invoke(ext, 35)
+        if (intSetter != null) {
+            intSetter.invoke(ext, 35)
+        } else {
+            // 部分 AGP 版本只暴露字符串重载，回退到 "android-35"
+            val strSetter = methods.firstOrNull { m ->
+                m.name == "setCompileSdkVersion" && m.parameterCount == 1 &&
+                    m.parameterTypes[0] == String::class.java
+            }
+            strSetter?.invoke(ext, "android-35")
+        }
     }
     if (state.executed) {
         applyCompileSdk()
